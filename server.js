@@ -3,7 +3,7 @@ const axios = require('axios');
 const app = express();
 app.use(express.json());
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN;
@@ -30,20 +30,28 @@ app.post('/webhook', async (req, res) => {
 
     if (!conversations.has(phone)) conversations.set(phone, []);
     const history = conversations.get(phone);
-    history.push({ role: 'user', parts: [{ text: message }] });
+    history.push({ role: 'user', content: message });
     if (history.length > 20) history.splice(0, history.length - 20);
 
-    const contents = [
-      { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
-      { role: 'model', parts: [{ text: 'Entendido!' }] },
-      ...history
-    ];
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
+        system: SYSTEM_PROMPT,
+        messages: history
+      },
+      {
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        }
+      }
+    );
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
-    const response = await axios.post(url, { contents });
-
-    const reply = response.data.candidates[0].content.parts[0].text;
-    history.push({ role: 'model', parts: [{ text: reply }] });
+    const reply = response.data.content[0].text;
+    history.push({ role: 'assistant', content: reply });
 
     await axios.post(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`,
