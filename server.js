@@ -34,7 +34,7 @@ app.post('/webhook', async (req, res) => {
     if (history.length > 20) history.splice(0, history.length - 20);
 
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,
       {
         system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: history
