@@ -33,12 +33,14 @@ app.post('/webhook', async (req, res) => {
     history.push({ role: 'user', parts: [{ text: message }] });
     if (history.length > 20) history.splice(0, history.length - 20);
 
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const contents = [
+      { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+      { role: 'model', parts: [{ text: 'Entendido! Vou atender como vendedor especialista da Royal Celulares.' }] },
+      ...history
+    ];
 
-    const response = await axios.post(url, {
-      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: history
-    });
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const response = await axios.post(url, { contents });
 
     const reply = response.data.candidates[0].content.parts[0].text;
     history.push({ role: 'model', parts: [{ text: reply }] });
