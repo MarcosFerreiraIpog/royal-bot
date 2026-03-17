@@ -9,6 +9,7 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN;
+const ADMIN_PHONE = '5562991519400';
 const PORT = process.env.PORT || 8080;
 
 const SYSTEM_PROMPT = `Você é um atendente virtual especializado em vendas e atendimento via WhatsApp de uma loja de eletrônicos e assistência técnica.
@@ -30,8 +31,7 @@ A loja vende:
 - Produtos JBL
 - Smartphones Xiaomi
 - Acessórios eletrônicos
-
-Também oferece assistência técnica especializada.
+- Assistência técnica especializada
 
 Diferenciais:
 - Aparelhos revisados e de qualidade
@@ -49,8 +49,10 @@ Me conta rapidinho, como posso te ajudar hoje?
 3️⃣ Assistência técnica"
 
 PREÇO E DISPONIBILIDADE
-NUNCA invente preços. Sempre que perguntarem valor responda:
-"Deixa eu confirmar o valor atualizado pra você rapidinho 👌"
+NUNCA invente preços. Quando cliente perguntar preço responda EXATAMENTE:
+"Deixa eu confirmar o valor atualizado pra você rapidinho 👌
+Já te retorno em instantes 😊"
+E inclua no final da sua resposta a tag: [CONSULTAR_PRECO: produto que o cliente quer]
 
 TÉCNICAS DE VENDAS
 - Confiança: "Todos nossos aparelhos são revisados"
@@ -64,6 +66,7 @@ REGRAS
 - Sempre entender o cliente antes`;
 
 const conversations = new Map();
+const pendingPrices = new Map(); // phone -> produto
 
 app.get('/', (req, res) => {
   res.send('Royal Celulares Bot rodando!');
@@ -89,6 +92,14 @@ async function transcribeAudio(audioBuffer, mimeType) {
   return response.data.text;
 }
 
+async function sendWhatsApp(phone, message) {
+  await axios.post(
+    `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`,
+    { phone, message },
+    { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
+  );
+}
+
 async function processMessage(phone, userContent) {
   if (!conversations.has(phone)) conversations.set(phone, []);
   const history = conversations.get(phone);
@@ -112,17 +123,24 @@ async function processMessage(phone, userContent) {
     }
   );
 
-  const reply = response.data.content[0].text;
+  let reply = response.data.content[0].text;
+
+  // Verifica se precisa consultar preço
+  const match = reply.match(/\[CONSULTAR_PRECO:\s*(.+?)\]/);
+  if (match) {
+    const produto = match[1].trim();
+    reply = reply.replace(/\[CONSULTAR_PRECO:.*?\]/, '').trim();
+    pendingPrices.set(phone, produto);
+
+    // Notifica o admin
+    await sendWhatsApp(
+      ADMIN_PHONE,
+      `🔔 *Consulta de preço*\n\n👤 Cliente: ${phone}\n📱 Produto: ${produto}\n\nResponda nesse formato:\nPRECO|${phone}|R$ 0.000`
+    );
+  }
+
   history.push({ role: 'assistant', content: reply });
   return reply;
-}
-
-async function sendWhatsApp(phone, message) {
-  await axios.post(
-    `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/send-text`,
-    { phone, message },
-    { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
-  );
 }
 
 app.post('/webhook', async (req, res) => {
@@ -134,7 +152,31 @@ app.post('/webhook', async (req, res) => {
 
     const phone = body.phone;
 
-    // MENSAGEM DE TEXTO
+    // RESPOSTA DO ADMIN COM PREÇO
+    if (phone === ADMIN_PHONE && body.text?.message) {
+      const msg = body.text.message.trim();
+      if (msg.startsWith('PRECO|')) {
+        const parts = msg.split('|');
+        if (parts.length >= 3) {
+          const clientPhone = parts[1].trim();
+          const valor = parts.slice(2).join('|').trim();
+          const produto = pendingPrices.get(clientPhone) || 'produto';
+
+          // Manda o preço para o cliente
+          const priceMsg = `Acabei de verificar aqui no sistema 👌\n\n📱 ${produto}\n💰 ${valor}\n🛡️ Garantia inclusa\n\nSe quiser, já posso separar um pra você 😊`;
+
+          if (!conversations.has(clientPhone)) conversations.set(clientPhone, []);
+          conversations.get(clientPhone).push({ role: 'assistant', content: priceMsg });
+
+          await sendWhatsApp(clientPhone, priceMsg);
+          await sendWhatsApp(ADMIN_PHONE, `✅ Preço enviado para o cliente ${clientPhone}`);
+          pendingPrices.delete(clientPhone);
+        }
+      }
+      return;
+    }
+
+    // MENSAGEM DE TEXTO DO CLIENTE
     if (body.text?.message) {
       const message = body.text.message;
       console.log(`📩 [${phone}] ${message}`);
@@ -155,7 +197,7 @@ app.post('/webhook', async (req, res) => {
       const transcription = await transcribeAudio(audioBuffer, mimeType);
       console.log(`📝 Transcrição: ${transcription}`);
 
-      const reply = await processMessage(phone, `[Áudio transcrito]: ${transcription}`);
+      const reply = await processMessage(phone, `[Áudio]: ${transcription}`);
       await sendWhatsApp(phone, reply);
       return;
     }
