@@ -22,7 +22,6 @@ COMPORTAMENTO
 - Linguagem simples, amigável e natural (estilo WhatsApp)
 - Seja consultivo: ajude o cliente a decidir
 - Sempre faça perguntas antes de vender
-- Nunca responda seco ou curto demais
 - Nunca diga que é uma IA
 - Sempre conduza a conversa
 
@@ -50,10 +49,10 @@ Me conta rapidinho, como posso te ajudar hoje?
 3️⃣ Assistência técnica"
 
 PREÇO E DISPONIBILIDADE
-NUNCA invente preços. Quando cliente perguntar preço responda EXATAMENTE:
+NUNCA invente preços. Quando cliente perguntar preço responda:
 "Deixa eu confirmar o valor atualizado pra você rapidinho 👌
 Já te retorno em instantes 😊"
-E inclua no final da sua resposta a tag: [CONSULTAR_PRECO: produto que o cliente quer]
+E inclua no final: [CONSULTAR_PRECO: produto que o cliente quer]
 
 TÉCNICAS DE VENDAS
 - Confiança: "Todos nossos aparelhos são revisados"
@@ -76,10 +75,13 @@ async function fetchInstructions() {
     const now = Date.now();
     if (now - lastFetch < 60000 && cachedInstructions) return cachedInstructions;
 
-    const response = await axios.get(SHEETS_URL);
-    const lines = response.data.split('\n').filter(l => l.trim());
-    // Pula o cabeçalho e junta todas as instruções
-    const instructions = lines.slice(1).join('\n').trim();
+    const response = await axios.get(SHEETS_URL, { timeout: 5000 });
+    const lines = response.data.split('\n').slice(1);
+    const instructions = lines
+      .map(line => line.replace(/^"|"$/g, '').trim())
+      .filter(line => line.length > 0)
+      .join('\n');
+
     cachedInstructions = instructions;
     lastFetch = now;
     console.log('📋 Instruções atualizadas da planilha');
@@ -90,10 +92,10 @@ async function fetchInstructions() {
   }
 }
 
-async function getSystemPrompt() {
+async function buildSystemPrompt() {
   const instructions = await fetchInstructions();
   if (!instructions) return SYSTEM_PROMPT_BASE;
-  return `${SYSTEM_PROMPT_BASE}\n\nINSTRUÇÕES ATUALIZADAS (siga com prioridade):\n${instructions}`;
+  return `${SYSTEM_PROMPT_BASE}\n\nINSTRUÇÕES ADICIONAIS (atualizadas em tempo real):\n${instructions}`;
 }
 
 async function transcribeAudio(audioBuffer, mimeType) {
@@ -106,12 +108,7 @@ async function transcribeAudio(audioBuffer, mimeType) {
   const response = await axios.post(
     'https://api.groq.com/openai/v1/audio/transcriptions',
     formData,
-    {
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        ...formData.getHeaders()
-      }
-    }
+    { headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, ...formData.getHeaders() } }
   );
   return response.data.text;
 }
@@ -130,7 +127,7 @@ async function processMessage(phone, userContent) {
   history.push({ role: 'user', content: userContent });
   if (history.length > 20) history.splice(0, history.length - 20);
 
-  const systemPrompt = await getSystemPrompt();
+  const systemPrompt = await buildSystemPrompt();
 
   const response = await axios.post(
     'https://api.anthropic.com/v1/messages',
@@ -167,9 +164,7 @@ async function processMessage(phone, userContent) {
   return reply;
 }
 
-app.get('/', (req, res) => {
-  res.send('Royal Celulares Bot rodando!');
-});
+app.get('/', (req, res) => res.send('Royal Celulares Bot rodando!'));
 
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
@@ -203,7 +198,7 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // MENSAGEM DE TEXTO
+    // TEXTO
     if (body.text?.message) {
       const message = body.text.message;
       console.log(`📩 [${phone}] ${message}`);
@@ -212,18 +207,12 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // MENSAGEM DE ÁUDIO
+    // ÁUDIO
     if (body.audio?.audioUrl) {
       console.log(`🎤 [${phone}] Áudio recebido`);
-      const audioUrl = body.audio.audioUrl;
-      const mimeType = body.audio.mimeType || 'audio/ogg';
-
-      const audioResponse = await axios.get(audioUrl, { responseType: 'arraybuffer' });
-      const audioBuffer = Buffer.from(audioResponse.data);
-
-      const transcription = await transcribeAudio(audioBuffer, mimeType);
+      const audioResponse = await axios.get(body.audio.audioUrl, { responseType: 'arraybuffer' });
+      const transcription = await transcribeAudio(Buffer.from(audioResponse.data), body.audio.mimeType || 'audio/ogg');
       console.log(`📝 Transcrição: ${transcription}`);
-
       const reply = await processMessage(phone, `[Áudio]: ${transcription}`);
       await sendWhatsApp(phone, reply);
       return;
@@ -234,6 +223,4 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log('Bot rodando na porta ' + PORT);
-});
+app.listen(PORT, () => console.log('Bot rodando na porta ' + PORT));
